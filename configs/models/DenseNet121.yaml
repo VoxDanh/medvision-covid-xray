@@ -1,0 +1,9 @@
+model:
+  name: DenseNet121
+  pretrained: true
+
+  num_classes: 2
+
+  input_channels: 1
+
+  dropout: 0.0
