@@ -1,6 +1,5 @@
 # ============================================================
 # src/train.py
-# TRAINING ONLY
 # ============================================================
 
 import json
@@ -13,11 +12,10 @@ import torch.nn as nn
 import yaml
 
 from src.models.factory import create_model
-from src.dataset import create_dataloaders
 
 
 # ============================================================
-# UTILITIES
+# CONFIG
 # ============================================================
 
 def load_yaml(path):
@@ -25,14 +23,9 @@ def load_yaml(path):
         return yaml.safe_load(f)
 
 
-def save_json(data, path):
-    with open(path, "w") as f:
-        json.dump(
-            data,
-            f,
-            indent=4
-        )
-
+# ============================================================
+# RANDOM SEED
+# ============================================================
 
 def set_seed(seed):
     np.random.seed(seed)
@@ -41,6 +34,10 @@ def set_seed(seed):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
+
+# ============================================================
+# MODEL PARAMETERS
+# ============================================================
 
 def count_parameters(model):
 
@@ -59,7 +56,7 @@ def count_parameters(model):
 
 
 # ============================================================
-# TRAIN
+# TRAIN ONE EPOCH
 # ============================================================
 
 def train_one_epoch(
@@ -72,7 +69,8 @@ def train_one_epoch(
 
     model.train()
 
-    total_loss = 0.0
+    running_loss = 0.0
+
     correct = 0
     total = 0
 
@@ -94,7 +92,7 @@ def train_one_epoch(
 
         optimizer.step()
 
-        total_loss += (
+        running_loss += (
             loss.item() * images.size(0)
         )
 
@@ -108,10 +106,15 @@ def train_one_epoch(
 
         total += labels.size(0)
 
-    loss = total_loss / total
-    accuracy = correct / total
+    epoch_loss = (
+        running_loss / total
+    )
 
-    return loss, accuracy
+    epoch_accuracy = (
+        correct / total
+    )
+
+    return epoch_loss, epoch_accuracy
 
 
 # ============================================================
@@ -128,7 +131,8 @@ def validate(
 
     model.eval()
 
-    total_loss = 0.0
+    running_loss = 0.0
+
     correct = 0
     total = 0
 
@@ -144,7 +148,7 @@ def validate(
             labels
         )
 
-        total_loss += (
+        running_loss += (
             loss.item() * images.size(0)
         )
 
@@ -158,14 +162,200 @@ def validate(
 
         total += labels.size(0)
 
-    loss = total_loss / total
-    accuracy = correct / total
+    epoch_loss = (
+        running_loss / total
+    )
 
-    return loss, accuracy
+    epoch_accuracy = (
+        correct / total
+    )
+
+    return epoch_loss, epoch_accuracy
 
 
 # ============================================================
-# MAIN
+# TEST PREDICTIONS
+# ============================================================
+
+@torch.no_grad()
+def predict(
+    model,
+    loader,
+    device
+):
+
+    model.eval()
+
+    all_labels = []
+    all_predictions = []
+    all_probabilities = []
+
+    for images, labels in loader:
+
+        images = images.to(device)
+
+        outputs = model(images)
+
+        probabilities = torch.softmax(
+            outputs,
+            dim=1
+        )
+
+        predictions = probabilities.argmax(
+            dim=1
+        )
+
+        all_labels.extend(
+            labels.numpy()
+        )
+
+        all_predictions.extend(
+            predictions.cpu().numpy()
+        )
+
+        all_probabilities.extend(
+            probabilities.cpu().numpy()
+        )
+
+    return (
+        np.array(all_labels),
+        np.array(all_predictions),
+        np.array(all_probabilities)
+    )
+
+
+# ============================================================
+# METRICS
+# ============================================================
+
+def calculate_metrics(
+    labels,
+    predictions,
+    probabilities
+):
+
+    from sklearn.metrics import (
+        accuracy_score,
+        precision_score,
+        recall_score,
+        f1_score,
+        roc_auc_score,
+        average_precision_score,
+        confusion_matrix
+    )
+
+    accuracy = accuracy_score(
+        labels,
+        predictions
+    )
+
+    precision = precision_score(
+        labels,
+        predictions,
+        zero_division=0
+    )
+
+    recall = recall_score(
+        labels,
+        predictions,
+        zero_division=0
+    )
+
+    f1 = f1_score(
+        labels,
+        predictions,
+        zero_division=0
+    )
+
+    # --------------------------------------------------------
+    # CONFUSION MATRIX
+    # --------------------------------------------------------
+
+    tn, fp, fn, tp = confusion_matrix(
+        labels,
+        predictions,
+        labels=[0, 1]
+    ).ravel()
+
+    # --------------------------------------------------------
+    # SPECIFICITY
+    # --------------------------------------------------------
+
+    specificity = (
+        tn / (tn + fp)
+        if (tn + fp) > 0
+        else 0
+    )
+
+    # --------------------------------------------------------
+    # AUROC
+    # --------------------------------------------------------
+
+    auroc = roc_auc_score(
+        labels,
+        probabilities[:, 1]
+    )
+
+    # --------------------------------------------------------
+    # PR-AUC
+    # --------------------------------------------------------
+
+    pr_auc = average_precision_score(
+        labels,
+        probabilities[:, 1]
+    )
+
+    return {
+
+        "accuracy": float(accuracy),
+
+        "precision": float(precision),
+
+        "recall": float(recall),
+
+        "specificity": float(
+            specificity
+        ),
+
+        "f1": float(f1),
+
+        "auroc": float(auroc),
+
+        "pr_auc": float(pr_auc),
+
+        "confusion_matrix": {
+
+            "tn": int(tn),
+            "fp": int(fp),
+            "fn": int(fn),
+            "tp": int(tp)
+        }
+    }
+
+
+# ============================================================
+# SAVE JSON
+# ============================================================
+
+def save_json(
+    data,
+    path
+):
+
+    with open(
+        path,
+        "w"
+    ) as f:
+
+        json.dump(
+            data,
+            f,
+            indent=4
+        )
+
+
+# ============================================================
+# MAIN TRAINING
 # ============================================================
 
 def run_training(
@@ -174,7 +364,11 @@ def run_training(
     experiment_id
 ):
 
-    start_time = time.perf_counter()
+    # ========================================================
+    # START TIMER
+    # ========================================================
+
+    total_start_time = time.perf_counter()
 
     # ========================================================
     # LOAD CONFIG
@@ -212,26 +406,31 @@ def run_training(
         else "cpu"
     )
 
-    model_name = (
-        model_config_data[
-            "model"
-        ]["name"]
-    )
-
     print("=" * 70)
     print("MEDVISION-CXR TRAINING")
     print("=" * 70)
 
-    print(f"Experiment : {experiment_id}")
-    print(f"Model      : {model_name}")
-    print(f"Device     : {device}")
+    print(
+        f"Experiment : {experiment_id}"
+    )
+
+    print(
+        f"Model      : "
+        f"{model_config_data['model']['name']}"
+    )
+
+    print(
+        f"Device     : {device}"
+    )
 
     if torch.cuda.is_available():
 
         print(
-            "GPU        : "
+            f"GPU        : "
             f"{torch.cuda.get_device_name(0)}"
         )
+
+    print("=" * 70)
 
     # ========================================================
     # MODEL
@@ -248,15 +447,43 @@ def run_training(
     )
 
     print(
-        f"Parameters : "
+        f"Total parameters     : "
         f"{total_params:,}"
     )
 
-    print("=" * 70)
+    print(
+        f"Trainable parameters : "
+        f"{trainable_params:,}"
+    )
 
     # ========================================================
-    # DATA
+    # DATASET
     # ========================================================
+
+    # TODO:
+    #
+    # dataset.py sẽ trả về:
+    #
+    # train_loader
+    # val_loader
+    # test_loader
+    # class_weights
+    #
+    # Ví dụ:
+    #
+    # from src.dataset import create_dataloaders
+    #
+    # (
+    #     train_loader,
+    #     val_loader,
+    #     test_loader,
+    #     class_weights
+    # ) = create_dataloaders(
+    #     base_config,
+    #     scenario_config_data
+    # )
+
+    from src.dataset import create_dataloaders
 
     (
         train_loader,
@@ -269,7 +496,7 @@ def run_training(
     )
 
     # ========================================================
-    # LOSS
+    # CLASS WEIGHT
     # ========================================================
 
     if class_weights is not None:
@@ -283,8 +510,8 @@ def run_training(
         )
 
         print(
-            "Class weights:",
-            class_weights.tolist()
+            f"Class weights : "
+            f"{class_weights.tolist()}"
         )
 
     else:
@@ -292,7 +519,7 @@ def run_training(
         criterion = nn.CrossEntropyLoss()
 
         print(
-            "Class weights: None"
+            "Class weights : None"
         )
 
     # ========================================================
@@ -300,9 +527,8 @@ def run_training(
     # ========================================================
 
     optimizer_config = (
-        base_config[
-            "training"
-        ]["optimizer"]
+        base_config["training"]
+        ["optimizer"]
     )
 
     optimizer = torch.optim.AdamW(
@@ -323,9 +549,8 @@ def run_training(
     # ========================================================
 
     scheduler_config = (
-        base_config[
-            "training"
-        ]["scheduler"]
+        base_config["training"]
+        ["scheduler"]
     )
 
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -351,7 +576,7 @@ def run_training(
         base_config["training"]
     )
 
-    max_epochs = training_config[
+    epochs = training_config[
         "epochs"
     ]
 
@@ -368,7 +593,7 @@ def run_training(
     )
 
     # ========================================================
-    # OUTPUT
+    # OUTPUT DIRECTORY
     # ========================================================
 
     output_root = Path(
@@ -377,24 +602,25 @@ def run_training(
         ]["root"]
     )
 
+    model_name = (
+        model_config_data[
+            "model"
+        ]["name"]
+    )
+
     experiment_dir = (
         output_root
         / experiment_id
         / model_name
     )
 
-    training_dir = (
-        experiment_dir
-        / "training"
-    )
-
-    training_dir.mkdir(
+    experiment_dir.mkdir(
         parents=True,
         exist_ok=True
     )
 
     # ========================================================
-    # HISTORY
+    # TRAINING VARIABLES
     # ========================================================
 
     history = []
@@ -406,7 +632,7 @@ def run_training(
     patience_counter = 0
 
     # ========================================================
-    # TRAINING LOOP
+    # TRAIN
     # ========================================================
 
     print("\n")
@@ -414,9 +640,11 @@ def run_training(
     print("START TRAINING")
     print("=" * 70)
 
-    for epoch in range(max_epochs):
+    for epoch in range(epochs):
 
-        epoch_start = time.perf_counter()
+        epoch_start_time = (
+            time.perf_counter()
+        )
 
         # ----------------------------------------------------
         # TRAIN
@@ -451,49 +679,54 @@ def run_training(
             val_loss
         )
 
-        learning_rate = (
+        current_lr = (
             optimizer.param_groups[0]["lr"]
         )
 
         # ----------------------------------------------------
-        # TIME
+        # EPOCH TIME
         # ----------------------------------------------------
 
         epoch_time = (
             time.perf_counter()
-            - epoch_start
+            - epoch_start_time
         )
 
         # ----------------------------------------------------
-        # HISTORY
+        # SAVE HISTORY
         # ----------------------------------------------------
 
-        epoch_history = {
+        epoch_result = {
 
-            "epoch":
-                epoch + 1,
+            "epoch": epoch + 1,
 
-            "train_loss":
-                float(train_loss),
+            "train_loss": float(
+                train_loss
+            ),
 
-            "train_accuracy":
-                float(train_accuracy),
+            "train_accuracy": float(
+                train_accuracy
+            ),
 
-            "val_loss":
-                float(val_loss),
+            "val_loss": float(
+                val_loss
+            ),
 
-            "val_accuracy":
-                float(val_accuracy),
+            "val_accuracy": float(
+                val_accuracy
+            ),
 
-            "learning_rate":
-                float(learning_rate),
+            "learning_rate": float(
+                current_lr
+            ),
 
-            "epoch_time_seconds":
-                float(epoch_time)
+            "epoch_time_seconds": float(
+                epoch_time
+            )
         }
 
         history.append(
-            epoch_history
+            epoch_result
         )
 
         # ----------------------------------------------------
@@ -502,12 +735,12 @@ def run_training(
 
         print(
             f"Epoch "
-            f"{epoch + 1:03d}/{max_epochs:03d} | "
+            f"{epoch + 1:03d}/{epochs:03d} | "
             f"Train Loss: {train_loss:.4f} | "
             f"Train Acc: {train_accuracy:.4f} | "
             f"Val Loss: {val_loss:.4f} | "
             f"Val Acc: {val_accuracy:.4f} | "
-            f"LR: {learning_rate:.2e} | "
+            f"LR: {current_lr:.2e} | "
             f"Time: {epoch_time:.1f}s"
         )
 
@@ -525,7 +758,7 @@ def run_training(
 
             torch.save(
                 model.state_dict(),
-                training_dir
+                experiment_dir
                 / "best_model.pth"
             )
 
@@ -542,40 +775,44 @@ def run_training(
         # ----------------------------------------------------
 
         if (
-            early_stopping_config["enabled"]
+            early_stopping_config[
+                "enabled"
+            ]
             and
             patience_counter
             >= early_stopping_patience
         ):
 
             print(
-                "\nEarly stopping."
+                f"\nEarly stopping "
+                f"at epoch {epoch + 1}"
             )
 
             break
 
     # ========================================================
-    # TRAINING TIME
+    # TOTAL TRAINING TIME
     # ========================================================
 
-    total_time = (
+    total_training_time = (
         time.perf_counter()
-        - start_time
+        - total_start_time
     )
 
     hours = int(
-        total_time // 3600
+        total_training_time // 3600
     )
 
     minutes = int(
-        (total_time % 3600) // 60
+        (total_training_time % 3600)
+        // 60
     )
 
     seconds = int(
-        total_time % 60
+        total_training_time % 60
     )
 
-    time_formatted = (
+    training_time_formatted = (
         f"{hours:02d}:"
         f"{minutes:02d}:"
         f"{seconds:02d}"
@@ -585,108 +822,268 @@ def run_training(
     # SAVE FINAL MODEL
     # ========================================================
 
-    torch.save(
-        model.state_dict(),
-        training_dir
-        / "final_model.pth"
-    )
+    if base_config[
+        "output"
+    ]["save_final_model"]:
+
+        torch.save(
+            model.state_dict(),
+            experiment_dir
+            / "final_model.pth"
+        )
 
     # ========================================================
     # SAVE HISTORY
     # ========================================================
 
-    save_json(
-        history,
-        training_dir
-        / "history.json"
+    if base_config[
+        "output"
+    ]["save_history"]:
+
+        save_json(
+            history,
+            experiment_dir
+            / "history.json"
+        )
+
+    # ========================================================
+    # LOAD BEST MODEL
+    # ========================================================
+
+    best_model_path = (
+        experiment_dir
+        / "best_model.pth"
+    )
+
+    model.load_state_dict(
+        torch.load(
+            best_model_path,
+            map_location=device
+        )
     )
 
     # ========================================================
-    # TRAINING SUMMARY
+    # TEST
     # ========================================================
 
-    training_summary = {
+    print("\n")
+    print("=" * 70)
+    print("TESTING BEST MODEL")
+    print("=" * 70)
 
-        "experiment_id":
-            experiment_id,
+    test_labels, test_predictions, test_probabilities = (
+        predict(
+            model,
+            test_loader,
+            device
+        )
+    )
 
-        "model":
-            model_name,
+    test_metrics = calculate_metrics(
+        test_labels,
+        test_predictions,
+        test_probabilities
+    )
 
-        "scenario":
-            scenario_config_data[
-                "scenario"
-            ]["name"],
+    # ========================================================
+    # DISPLAY TEST RESULTS
+    # ========================================================
 
-        "seed":
-            seed,
+    print(
+        f"Accuracy    : "
+        f"{test_metrics['accuracy']:.4f}"
+    )
 
-        "device":
-            str(device),
+    print(
+        f"Precision   : "
+        f"{test_metrics['precision']:.4f}"
+    )
 
-        "total_parameters":
-            total_params,
+    print(
+        f"Recall      : "
+        f"{test_metrics['recall']:.4f}"
+    )
 
-        "trainable_parameters":
-            trainable_params,
+    print(
+        f"Specificity : "
+        f"{test_metrics['specificity']:.4f}"
+    )
 
-        "epochs_configured":
-            max_epochs,
+    print(
+        f"F1          : "
+        f"{test_metrics['f1']:.4f}"
+    )
 
-        "epochs_completed":
-            len(history),
+    print(
+        f"AUROC       : "
+        f"{test_metrics['auroc']:.4f}"
+    )
 
-        "best_epoch":
-            best_epoch,
+    print(
+        f"PR-AUC      : "
+        f"{test_metrics['pr_auc']:.4f}"
+    )
 
-        "best_val_loss":
-            float(best_val_loss),
+    print(
+        "\nConfusion Matrix:"
+    )
 
-        "batch_size":
-            training_config[
-                "batch_size"
-            ],
+    print(
+        test_metrics[
+            "confusion_matrix"
+        ]
+    )
 
-        "optimizer":
-            optimizer_config[
-                "name"
-            ],
+    # ========================================================
+    # SAVE PREDICTIONS
+    # ========================================================
 
-        "learning_rate":
-            optimizer_config[
-                "learning_rate"
-            ],
+    if base_config[
+        "output"
+    ]["save_predictions"]:
 
-        "weight_decay":
-            optimizer_config[
-                "weight_decay"
-            ],
+        prediction_data = {
 
-        "scheduler":
-            scheduler_config[
-                "name"
-            ],
+            "labels": test_labels.tolist(),
 
-        "early_stopping":
-            early_stopping_config[
-                "enabled"
-            ],
+            "predictions":
+                test_predictions.tolist(),
 
-        "training_time_seconds":
-            float(total_time),
+            "probability_normal":
+                test_probabilities[:, 0].tolist(),
 
-        "training_time":
-            time_formatted
+            "probability_covid":
+                test_probabilities[:, 1].tolist()
+        }
+
+        save_json(
+            prediction_data,
+            experiment_dir
+            / "predictions.json"
+        )
+
+    # ========================================================
+    # SAVE RESULT
+    # ========================================================
+
+    result = {
+
+        "experiment": {
+
+            "experiment_id":
+                experiment_id,
+
+            "model":
+                model_name,
+
+            "scenario":
+                scenario_config_data[
+                    "scenario"
+                ]["name"],
+
+            "seed":
+                seed,
+
+            "device":
+                str(device)
+        },
+
+        "model_info": {
+
+            "total_parameters":
+                total_params,
+
+            "trainable_parameters":
+                trainable_params
+        },
+
+        "training": {
+
+            "epochs_configured":
+                epochs,
+
+            "epochs_completed":
+                len(history),
+
+            "best_epoch":
+                best_epoch,
+
+            "batch_size":
+                training_config[
+                    "batch_size"
+                ],
+
+            "optimizer":
+                optimizer_config[
+                    "name"
+                ],
+
+            "learning_rate":
+                optimizer_config[
+                    "learning_rate"
+                ],
+
+            "weight_decay":
+                optimizer_config[
+                    "weight_decay"
+                ],
+
+            "scheduler":
+                scheduler_config[
+                    "name"
+                ],
+
+            "early_stopping":
+                early_stopping_config[
+                    "enabled"
+                ],
+
+            "training_time_seconds":
+                total_training_time,
+
+            "training_time":
+                training_time_formatted
+        },
+
+        "test_metrics":
+            test_metrics,
+
+        "files": {
+
+            "best_model":
+                str(
+                    experiment_dir
+                    / "best_model.pth"
+                ),
+
+            "final_model":
+                str(
+                    experiment_dir
+                    / "final_model.pth"
+                ),
+
+            "history":
+                str(
+                    experiment_dir
+                    / "history.json"
+                ),
+
+            "predictions":
+                str(
+                    experiment_dir
+                    / "predictions.json"
+                )
+        }
     }
 
     save_json(
-        training_summary,
-        training_dir
-        / "training_summary.json"
+        result,
+        experiment_dir
+        / "result.json"
     )
 
     # ========================================================
-    # SAVE CONFIG SNAPSHOT
+    # SAVE CONFIG
     # ========================================================
 
     config_snapshot = {
@@ -703,12 +1100,12 @@ def run_training(
 
     save_json(
         config_snapshot,
-        training_dir
-        / "training_config.json"
+        experiment_dir
+        / "config.json"
     )
 
     # ========================================================
-    # FINAL
+    # FINAL SUMMARY
     # ========================================================
 
     print("\n")
@@ -717,24 +1114,38 @@ def run_training(
     print("=" * 70)
 
     print(
-        f"Best epoch    : {best_epoch}"
+        f"Model              : {model_name}"
     )
 
     print(
-        f"Best val loss : "
-        f"{best_val_loss:.4f}"
+        f"Best epoch         : {best_epoch}"
     )
 
     print(
-        f"Training time : "
-        f"{time_formatted}"
+        f"Test F1            : "
+        f"{test_metrics['f1']:.4f}"
     )
 
     print(
-        f"Output        : "
-        f"{training_dir}"
+        f"Test AUROC         : "
+        f"{test_metrics['auroc']:.4f}"
+    )
+
+    print(
+        f"Test PR-AUC        : "
+        f"{test_metrics['pr_auc']:.4f}"
+    )
+
+    print(
+        f"Training time      : "
+        f"{training_time_formatted}"
+    )
+
+    print(
+        f"Output directory   : "
+        f"{experiment_dir}"
     )
 
     print("=" * 70)
 
-    return training_summary
+    return result
