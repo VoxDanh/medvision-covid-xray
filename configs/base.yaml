@@ -1,0 +1,76 @@
+project:
+  name: medvision-cxr
+  seed: 42
+  task: classification
+
+
+data:
+  root: "/content/drive/MyDrive/medvision_covid_xray_DriveSave/dataset/lung_roi/processed"
+
+  classes:
+    - Normal
+    - COVID
+
+  num_classes: 2
+
+  image_size: 224
+  channels: 1
+
+  split:
+    train: 0.8
+    val: 0.1
+    test: 0.1
+
+  stratify: true
+
+
+training:
+  batch_size: 32
+  epochs: 50
+  num_workers: 2
+
+  optimizer:
+    name: AdamW
+    learning_rate: 0.0001
+    weight_decay: 0.0001
+
+  scheduler:
+    name: ReduceLROnPlateau
+    factor: 0.5
+    patience: 3
+
+  early_stopping:
+    enabled: true
+    patience: 10
+
+
+loss:
+  name: CrossEntropyLoss
+
+  class_weights:
+    enabled: true
+    strategy: inverse_frequency
+
+
+evaluation:
+  metrics:
+    - accuracy
+    - precision
+    - recall
+    - specificity
+    - f1
+    - auroc
+    - pr_auc
+
+  monitor: f1
+  monitor_mode: max
+
+
+output:
+  root: "/content/drive/MyDrive/medvision_covid_xray_DriveSave/experiments"
+
+  save_best_model: true
+  save_final_model: true
+  save_history: true
+  save_confusion_matrix: true
+  save_predictions: true
