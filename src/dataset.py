@@ -1,3 +1,4 @@
+```python
 # ============================================================
 # src/dataset.py
 # DATASET + DATALOADERS
@@ -6,15 +7,18 @@
 # - Grayscale images
 # - Scenario-based augmentation
 # - Class weights for CrossEntropyLoss
+# - Cache images in system RAM
 # ============================================================
 
 from pathlib import Path
 
 import numpy as np
 import torch
-from PIL import Image
 
-from torch.utils.data import Dataset, DataLoader, Subset
+from PIL import Image
+from tqdm.auto import tqdm
+
+from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from sklearn.model_selection import train_test_split
 
@@ -40,9 +44,11 @@ class LungROIDataset(Dataset):
         classes,
         image_size=224,
         resize=False,
+        cache_in_memory=True,
     ):
         self.root = Path(root)
         self.classes = list(classes)
+
         self.class_to_idx = {
             class_name: index
             for index, class_name in enumerate(self.classes)
@@ -55,8 +61,12 @@ class LungROIDataset(Dataset):
 
         self.samples = []
 
-        # Preserve the class order specified in base.yaml.
+        # ----------------------------------------------------
+        # Discover image files
+        # ----------------------------------------------------
+
         for class_name in self.classes:
+
             class_dir = self.root / class_name
 
             if not class_dir.is_dir():
@@ -91,38 +101,140 @@ class LungROIDataset(Dataset):
 
         self.image_size = image_size
         self.resize = resize
+        self.cache_in_memory = cache_in_memory
+
+        # Cache contains grayscale uint8 NumPy arrays.
+        self.cached_images = None
+
+        # ----------------------------------------------------
+        # Dataset information
+        # ----------------------------------------------------
 
         print(f"Dataset root: {self.root}")
         print(f"Classes: {self.class_to_idx}")
 
         for class_name, class_idx in self.class_to_idx.items():
+
             count = sum(
                 label == class_idx
                 for _, label in self.samples
             )
+
             print(f"  {class_name}: {count:,} images")
+
+        # ----------------------------------------------------
+        # Load all images into system RAM
+        # ----------------------------------------------------
+
+        if self.cache_in_memory:
+
+            print(
+                f"\nLoading {len(self.samples):,} images into RAM..."
+            )
+
+            self.cached_images = []
+
+            try:
+                for image_path, _ in tqdm(
+                    self.samples,
+                    desc="Caching images",
+                    unit="image",
+                ):
+
+                    with Image.open(image_path) as image:
+
+                        image = image.convert("L")
+
+                        if self.resize:
+                            image = image.resize(
+                                (
+                                    self.image_size,
+                                    self.image_size,
+                                ),
+                                Image.Resampling.BILINEAR,
+                            )
+
+                        image_array = np.array(
+                            image,
+                            dtype=np.uint8,
+                            copy=True,
+                        )
+
+                    self.cached_images.append(image_array)
+
+            except Exception as exc:
+
+                self.cached_images = None
+
+                raise RuntimeError(
+                    f"Failed to cache image: {image_path}"
+                ) from exc
+
+            cached_bytes = sum(
+                image.nbytes
+                for image in self.cached_images
+            )
+
+            print(
+                f"Successfully cached {len(self.cached_images):,} images."
+            )
+
+            print(
+                f"Image pixel memory: "
+                f"{cached_bytes / (1024 ** 3):.3f} GiB"
+            )
 
     def __len__(self):
         return len(self.samples)
 
     def load_image(self, image_path):
+        """
+        Load an image directly from storage.
+        Used when cache_in_memory=False.
+        """
+
         with Image.open(image_path) as image:
+
             image = image.convert("L")
 
             if self.resize:
                 image = image.resize(
-                    (self.image_size, self.image_size),
+                    (
+                        self.image_size,
+                        self.image_size,
+                    ),
                     Image.Resampling.BILINEAR,
                 )
 
-            image = transforms.functional.to_tensor(image)
+            return image.copy()
 
-        return image
+    def get_pil_image(self, index):
+        """
+        Retrieve an independent PIL image.
+
+        If caching is enabled, read from RAM.
+        Otherwise, read from storage.
+        """
+
+        if self.cached_images is not None:
+
+            return Image.fromarray(
+                self.cached_images[index],
+                mode="L",
+            )
+
+        image_path, _ = self.samples[index]
+
+        return self.load_image(image_path)
 
     def __getitem__(self, index):
-        image_path, label = self.samples[index]
 
-        image = self.load_image(image_path)
+        _, label = self.samples[index]
+
+        image = self.get_pil_image(index)
+
+        # Convert PIL image to a grayscale tensor in [0, 1].
+        image = transforms.functional.to_tensor(image)
 
         return image, label
 
@@ -134,14 +246,19 @@ class LungROIDataset(Dataset):
 def calculate_mean_std(dataset, indices):
     """
     Calculate grayscale mean and standard deviation using
-    only the training subset.
+    only training samples.
     """
 
     pixel_sum = 0.0
     pixel_squared_sum = 0.0
     pixel_count = 0
 
-    for index in indices:
+    for index in tqdm(
+        indices,
+        desc="Calculating train mean/std",
+        unit="image",
+    ):
+
         image, _ = dataset[index]
 
         pixel_sum += image.sum().item()
@@ -187,7 +304,8 @@ def calculate_class_weights(labels, num_classes):
 
     if np.any(counts == 0):
         raise ValueError(
-            f"At least one class has no training samples: {counts.tolist()}"
+            "At least one class has no training samples: "
+            f"{counts.tolist()}"
         )
 
     total = counts.sum()
@@ -215,11 +333,22 @@ def create_dataloaders(base_config, scenario_config):
 
     dataset_root = data_config["root"]
     classes = data_config["classes"]
-    num_classes = int(data_config["num_classes"])
-    image_size = int(data_config.get("image_size", 224))
 
-    batch_size = int(training_config["batch_size"])
-    num_workers = int(training_config.get("num_workers", 2))
+    num_classes = int(
+        data_config["num_classes"]
+    )
+
+    image_size = int(
+        data_config.get("image_size", 224)
+    )
+
+    batch_size = int(
+        training_config["batch_size"]
+    )
+
+    num_workers = int(
+        training_config.get("num_workers", 2)
+    )
 
     split_config = data_config["split"]
 
@@ -245,12 +374,19 @@ def create_dataloaders(base_config, scenario_config):
     # Read scenario configuration
     # --------------------------------------------------------
 
-    input_config = scenario_config.get("input", {})
-    preprocessing_config = scenario_config.get(
-        "preprocessing", {}
+    input_config = scenario_config.get(
+        "input",
+        {},
     )
+
+    preprocessing_config = scenario_config.get(
+        "preprocessing",
+        {},
+    )
+
     augmentation_config = scenario_config.get(
-        "augmentation", {}
+        "augmentation",
+        {},
     )
 
     resize = bool(
@@ -258,8 +394,11 @@ def create_dataloaders(base_config, scenario_config):
     )
 
     if input_config.get("grayscale", True):
+
         input_channels = 1
+
     else:
+
         input_channels = int(
             input_config.get("channels", 3)
         )
@@ -271,7 +410,7 @@ def create_dataloaders(base_config, scenario_config):
         )
 
     # --------------------------------------------------------
-    # Load dataset
+    # Load dataset and cache images
     # --------------------------------------------------------
 
     dataset = LungROIDataset(
@@ -279,6 +418,7 @@ def create_dataloaders(base_config, scenario_config):
         classes=classes,
         image_size=image_size,
         resize=resize,
+        cache_in_memory=True,
     )
 
     labels = [
@@ -316,7 +456,6 @@ def create_dataloaders(base_config, scenario_config):
         for index in remaining_indices
     ]
 
-    # Split the remaining samples proportionally.
     relative_test_ratio = test_ratio / (
         val_ratio + test_ratio
     )
@@ -344,15 +483,12 @@ def create_dataloaders(base_config, scenario_config):
     print(f"  Test:  {len(test_indices):,}")
 
     # --------------------------------------------------------
-    # Calculate normalization from training samples only
+    # Calculate normalization using training samples only
     # --------------------------------------------------------
 
-    scale_config = preprocessing_config.get(
-        "scale", {}
-    )
-
     normalize_config = preprocessing_config.get(
-        "normalize", {}
+        "normalize",
+        {},
     )
 
     normalize_enabled = bool(
@@ -366,7 +502,8 @@ def create_dataloaders(base_config, scenario_config):
 
         calculate_from_train = bool(
             normalize_config.get(
-                "calculate_from_train", False
+                "calculate_from_train",
+                False,
             )
         )
 
@@ -381,6 +518,7 @@ def create_dataloaders(base_config, scenario_config):
             )
 
         elif mean is None or std is None:
+
             raise ValueError(
                 "Normalization mean/std are missing. "
                 "Set calculate_from_train=true or provide "
@@ -406,8 +544,6 @@ def create_dataloaders(base_config, scenario_config):
     train_transform_list = []
     eval_transform_list = []
 
-    # Scale is handled by ToTensor(), which converts
-    # 8-bit image values to the [0, 1] range.
     train_transform_list.append(
         transforms.ToTensor()
     )
@@ -417,6 +553,7 @@ def create_dataloaders(base_config, scenario_config):
     )
 
     if normalize_enabled:
+
         normalize_transform = transforms.Normalize(
             mean=[mean],
             std=[std],
@@ -430,14 +567,19 @@ def create_dataloaders(base_config, scenario_config):
             normalize_transform
         )
 
-    # Augmentation is applied to training data only.
+    # --------------------------------------------------------
+    # Training augmentation only
+    # --------------------------------------------------------
+
     if augmentation_config.get("enabled", False):
 
         flip_config = augmentation_config.get(
-            "horizontal_flip", {}
+            "horizontal_flip",
+            {},
         )
 
         if flip_config.get("enabled", False):
+
             train_transform_list.append(
                 transforms.RandomHorizontalFlip(
                     p=float(
@@ -447,10 +589,12 @@ def create_dataloaders(base_config, scenario_config):
             )
 
         rotation_config = augmentation_config.get(
-            "rotation", {}
+            "rotation",
+            {},
         )
 
         if rotation_config.get("enabled", False):
+
             train_transform_list.append(
                 transforms.RandomRotation(
                     degrees=float(
@@ -460,7 +604,8 @@ def create_dataloaders(base_config, scenario_config):
             )
 
         affine_config = augmentation_config.get(
-            "affine", {}
+            "affine",
+            {},
         )
 
         if affine_config.get("enabled", False):
@@ -469,16 +614,17 @@ def create_dataloaders(base_config, scenario_config):
                 affine_config.get("translate", 0.05)
             )
 
-            scale_config_affine = affine_config.get(
-                "scale", {}
+            affine_scale_config = affine_config.get(
+                "scale",
+                {},
             )
 
             scale_min = float(
-                scale_config_affine.get("min", 0.95)
+                affine_scale_config.get("min", 0.95)
             )
 
             scale_max = float(
-                scale_config_affine.get("max", 1.05)
+                affine_scale_config.get("max", 1.05)
             )
 
             train_transform_list.append(
@@ -503,7 +649,12 @@ def create_dataloaders(base_config, scenario_config):
 
     class TransformedSubset(Dataset):
 
-        def __init__(self, parent_dataset, subset_indices, transform):
+        def __init__(
+            self,
+            parent_dataset,
+            subset_indices,
+            transform,
+        ):
             self.parent_dataset = parent_dataset
             self.indices = list(subset_indices)
             self.transform = transform
@@ -512,22 +663,19 @@ def create_dataloaders(base_config, scenario_config):
             return len(self.indices)
 
         def __getitem__(self, index):
-            image_path, label = self.parent_dataset.samples[
-                self.indices[index]
+
+            parent_index = self.indices[index]
+
+            _, label = self.parent_dataset.samples[
+                parent_index
             ]
 
-            with Image.open(image_path) as image:
-                image = image.convert("L")
+            # Read from RAM cache instead of Google Drive.
+            image = self.parent_dataset.get_pil_image(
+                parent_index
+            )
 
-                if self.parent_dataset.resize:
-                    image = image.resize(
-                        (
-                            self.parent_dataset.image_size,
-                            self.parent_dataset.image_size,
-                        ),
-                        Image.Resampling.BILINEAR,
-                    )
-
+            if self.transform is not None:
                 image = self.transform(image)
 
             return image, label
@@ -554,9 +702,14 @@ def create_dataloaders(base_config, scenario_config):
     # Class weights: training split only
     # --------------------------------------------------------
 
-    loss_config = base_config.get("loss", {})
+    loss_config = base_config.get(
+        "loss",
+        {},
+    )
+
     class_weights_config = loss_config.get(
-        "class_weights", {}
+        "class_weights",
+        {},
     )
 
     class_weights_enabled = bool(
@@ -566,7 +719,8 @@ def create_dataloaders(base_config, scenario_config):
     if class_weights_enabled:
 
         strategy = class_weights_config.get(
-            "strategy", "inverse_frequency"
+            "strategy",
+            "inverse_frequency",
         )
 
         if strategy != "inverse_frequency":
@@ -585,18 +739,21 @@ def create_dataloaders(base_config, scenario_config):
         )
 
     else:
+
         class_weights = None
 
     # --------------------------------------------------------
     # DataLoaders
     # --------------------------------------------------------
 
+    pin_memory = torch.cuda.is_available()
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
-        pin_memory=torch.cuda.is_available(),
+        pin_memory=pin_memory,
     )
 
     val_loader = DataLoader(
@@ -604,7 +761,7 @@ def create_dataloaders(base_config, scenario_config):
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=torch.cuda.is_available(),
+        pin_memory=pin_memory,
     )
 
     test_loader = DataLoader(
@@ -612,11 +769,13 @@ def create_dataloaders(base_config, scenario_config):
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=torch.cuda.is_available(),
+        pin_memory=pin_memory,
     )
 
     print("\nDataLoaders created successfully.")
     print(f"  Batch size: {batch_size}")
+    print(f"  Workers: {num_workers}")
+    print(f"  RAM cache: {dataset.cached_images is not None}")
     print(f"  Train batches: {len(train_loader):,}")
     print(f"  Val batches: {len(val_loader):,}")
     print(f"  Test batches: {len(test_loader):,}")
@@ -627,3 +786,4 @@ def create_dataloaders(base_config, scenario_config):
         test_loader,
         class_weights,
     )
+```
