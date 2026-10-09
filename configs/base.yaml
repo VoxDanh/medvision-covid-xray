@@ -5,8 +5,7 @@ project:
 
 
 data:
-  root: "/content/drive/MyDrive/medvision_covid_xray_DriveSave/dataset/lung_roi/processed"
-
+  root: "/content/dataset/lung_roi/processed"
   classes:
     - Normal
     - COVID
