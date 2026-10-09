@@ -1,4 +1,3 @@
-```python
 # src/models/factory.py
 
 import torchvision.models as tv_models
@@ -66,4 +65,3 @@ def create_model(config):
         )
 
     return model
-```
