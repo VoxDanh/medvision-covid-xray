@@ -25,8 +25,7 @@ def create_model(config):
     # --------------------------------------------------
     # Resolve model constructor dynamically
     # --------------------------------------------------
-
-    torchvision_name = model_name[0].lower() + model_name[1:]
+    torchvision_name = model_name.lower()
 
     if not hasattr(tv_models, torchvision_name):
         raise ValueError(
