@@ -1,1 +1,8 @@
-
+model:
+  name: ResNet18
+  pretrained: true
+  num_classes: 2
+  input_channels: 1
+  first_layer: conv1
+  classifier: fc
+  dropout: 0.0
