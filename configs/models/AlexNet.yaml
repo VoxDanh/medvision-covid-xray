@@ -1,0 +1,8 @@
+model:
+  name: alexnet
+  pretrained: true
+  num_classes: 2
+  input_channels: 1
+  first_layer: features.0
+  classifier: classifier
+  dropout: 0.0
