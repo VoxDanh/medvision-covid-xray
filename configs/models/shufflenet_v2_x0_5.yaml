@@ -3,6 +3,6 @@ model:
   pretrained: true
   num_classes: 2
   input_channels: 1
-  first_layer: conv1[0]
+  first_layer: conv1.0
   classifier: fc
   dropout: 0.0
