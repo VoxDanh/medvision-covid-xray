@@ -1,11 +1,11 @@
 model:
-  name: convnext_tiny
+  name: mobilenet_v3_small
   pretrained: true
 
   num_classes: 2
   input_channels: 1
 
   first_layer: features.0.0
-  classifier: classifier.2
+  classifier: classifier.3
 
   dropout: 0.0
