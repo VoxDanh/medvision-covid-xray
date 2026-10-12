@@ -1,0 +1,8 @@
+model:
+  name: DenseNet201       # 🔥 đổi backbone thành DenseNet201
+  pretrained: true        # khuyến nghị dùng pretrained ImageNet
+  num_classes: 2          # số lớp: Normal, COVID
+  input_channels: 1       # ảnh X-ray grayscale
+  first_layer: features.conv0   # lớp đầu tiên của DenseNet
+  classifier: classifier        # classifier cuối cùng của DenseNet
+  dropout: 0.0            # có thể thêm dropout nếu cần
