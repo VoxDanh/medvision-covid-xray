@@ -1,8 +1,0 @@
-model:
-  name: EfficientNet_V2_L     # 🔥 đổi backbone thành EfficientNetV2-L
-  pretrained: true            # khuyến nghị dùng pretrained ImageNet
-  num_classes: 2              # số lớp: Normal, COVID
-  input_channels: 1           # ảnh X-ray grayscale
-  first_layer: "features.0.0" # lớp đầu tiên của EfficientNetV2-L (dùng dấu chấm thay cho [0][0])
-  classifier: classifier      # classifier cuối cùng
-  dropout: 0.0                # có thể thêm dropout nếu cần
