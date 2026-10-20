@@ -1,0 +1,48 @@
+scenario:
+  name: classification_lung_roi
+  description: "COVID vs Normal classification using preprocessed lung ROI images"
+
+
+input:
+  source: lung_roi
+
+  grayscale: true
+  channels: 1
+
+  image_size: 224
+
+
+preprocessing:
+  resize: false
+  # Dataset đã được resize 224x224 từ preprocessing stage
+
+  scale:
+    enabled: true
+    range: [0, 1]
+
+  normalize:
+    enabled: true
+    mean: null
+    std: null
+    calculate_from_train: true
+
+
+augmentation:
+  enabled: true
+  train_only: true
+
+  horizontal_flip:
+    enabled: true
+    probability: 0.5
+
+  rotation:
+    enabled: true
+    degrees: 10
+
+  affine:
+    enabled: true
+    translate: 0.05
+
+    scale:
+      min: 0.95
+      max: 1.05
