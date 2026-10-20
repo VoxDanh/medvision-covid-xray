@@ -33,7 +33,7 @@ augmentation:
 
   rotation:
     enabled: true
-    degrees: 4
+    degrees: 4 
 
   affine:
     enabled: true
