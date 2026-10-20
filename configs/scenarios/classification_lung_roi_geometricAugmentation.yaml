@@ -1,0 +1,46 @@
+```yaml
+scenario:
+  name: classification_lung_roi_composite
+  description: "COVID vs Normal classification using background-removed X-ray images with composited lung regions"
+
+input:
+  source: lung_roi_composite
+
+  grayscale: true
+  channels: 1
+
+  image_size: 224
+
+preprocessing:
+  resize: false
+
+  scale:
+    enabled: true
+    range: [0, 1]
+
+  normalize:
+    enabled: true
+    mean: null
+    std: null
+    calculate_from_train: true
+
+augmentation:
+  enabled: true
+  train_only: true
+
+  horizontal_flip:
+    enabled: true
+    probability: 0.5
+
+  rotation:
+    enabled: true
+    degrees: 7
+
+  affine:
+    enabled: true
+    translate: 0.03
+
+    scale:
+      min: 0.97
+      max: 1.03
+```
