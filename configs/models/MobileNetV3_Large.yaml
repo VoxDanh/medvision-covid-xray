@@ -1,12 +1,12 @@
 
 model:
-  name: MobileNetV3_Large
+  name: mobilenet_v3_large
   pretrained: true
 
   num_classes: 2
   input_channels: 3
 
   first_layer: features.0
-  classifier: classifier
+  classifier: classifier.3
 
   dropout: 0.2
