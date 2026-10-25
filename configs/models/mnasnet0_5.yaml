@@ -4,5 +4,5 @@ model:
   num_classes: 2
   input_channels: 1
   first_layer: layers.0
-  classifier: classifier
+  classifier: classifier.1
   dropout: 0.0
