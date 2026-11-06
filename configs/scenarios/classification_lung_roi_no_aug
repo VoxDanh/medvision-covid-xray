@@ -1,0 +1,28 @@
+scenario:
+  name: classification_lung_roi_no_aug
+  description: "COVID vs Normal classification using lung ROI images without data augmentation"
+
+input:
+  source: lung_roi
+
+  grayscale: true
+  channels: 1
+
+  image_size: 224
+
+preprocessing:
+  resize: false
+
+  scale:
+    enabled: true
+    range: [0, 1]
+
+  normalize:
+    enabled: true
+    mean: null
+    std: null
+    calculate_from_train: true
+
+augmentation:
+  enabled: false
+  train_only: true
