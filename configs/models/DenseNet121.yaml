@@ -9,3 +9,11 @@ model:
   classifier: classifier
 
   dropout: 0.0
+
+  freezing:
+    enabled: true
+    freeze_layers:
+      - features.conv0
+      - features.norm0
+      - features.denseblock1
+      - features.transition1
