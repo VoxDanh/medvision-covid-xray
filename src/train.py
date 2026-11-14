@@ -3,7 +3,8 @@
 # TRAINING ONLY
 #
 # - Loads configs relative to repository root
-# - Supports configurable layer-wise freezing
+# - Layer freezing is configured and applied by factory.py
+# - Keeps BatchNorm statistics fixed for frozen layers
 # - Trains using train split
 # - Uses validation metrics for checkpoint selection / early stopping
 # - Does NOT evaluate on test split
@@ -100,103 +101,50 @@ def format_duration(seconds):
 
 
 # ============================================================
-# LAYER-WISE FREEZING
+# FROZEN BATCHNORM HANDLING
 # ============================================================
 
-def apply_layer_freezing(model, model_config):
+def get_frozen_batchnorms(model, model_config):
     """
-    Freeze selected modules based on YAML configuration.
+    Find BatchNorm modules inside layers already frozen by factory.py.
 
-    Example:
-
-    freezing:
-      enabled: true
-      freeze_layers:
-        - features.conv0
-        - features.denseblock1
-
-    All parameters inside the selected modules will be frozen.
+    Layer freezing itself is handled only in factory.create_model().
+    This function only keeps frozen BatchNorm running statistics unchanged.
     """
 
     freezing_config = model_config.get("freezing", {})
 
-    freezing_enabled = bool(
-        freezing_config.get("enabled", False)
-    )
-
-    if not freezing_enabled:
+    if not freezing_config.get("enabled", False):
         print("\nFreezing: Disabled")
         return []
 
-    freeze_layers = freezing_config.get(
-        "freeze_layers", []
-    )
-
-    if not isinstance(freeze_layers, list):
-        raise TypeError(
-            "freezing.freeze_layers must be a list."
-        )
-
-    if not freeze_layers:
-        raise ValueError(
-            "Freezing is enabled but freeze_layers is empty."
-        )
-
-    # Map actual module names to modules.
+    freeze_layers = freezing_config.get("freeze_layers", [])
     module_map = dict(model.named_modules())
 
-    frozen_modules = []
-    frozen_module_names = []
+    frozen_batchnorms = []
+    seen = set()
 
     for layer_name in freeze_layers:
+        # factory.py validates these paths and applies requires_grad=False.
+        frozen_module = module_map[layer_name]
 
-        if layer_name not in module_map:
-            raise ValueError(
-                f"Layer '{layer_name}' does not exist in "
-                f"model '{model_config.get('name')}'.\n"
-                f"Check model.named_modules() for valid names."
-            )
-
-        module = module_map[layer_name]
-
-        # Freeze all parameters belonging to this module.
-        for parameter in module.parameters():
-            parameter.requires_grad = False
-
-        frozen_modules.append(module)
-        frozen_module_names.append(layer_name)
+        for module in frozen_module.modules():
+            if (
+                isinstance(module, nn.modules.batchnorm._BatchNorm)
+                and id(module) not in seen
+            ):
+                module.eval()
+                frozen_batchnorms.append(module)
+                seen.add(id(module))
 
     print("\nFreezing configuration:")
     print("-" * 60)
 
-    for layer_name in frozen_module_names:
+    for layer_name in freeze_layers:
         print(f"Frozen layer: {layer_name}")
 
+    print(f"Frozen BatchNorm modules: {len(frozen_batchnorms)}")
     print("-" * 60)
-
-    return frozen_modules
-
-
-def keep_frozen_batchnorm_in_eval(model, frozen_modules):
-    """
-    Keep BatchNorm modules inside frozen modules in eval mode.
-
-    This prevents their running statistics from changing
-    during training.
-    """
-
-    frozen_batchnorms = []
-
-    for frozen_module in frozen_modules:
-
-        for module in frozen_module.modules():
-
-            if isinstance(
-                module,
-                nn.modules.batchnorm._BatchNorm
-            ):
-                module.eval()
-                frozen_batchnorms.append(module)
 
     return frozen_batchnorms
 
@@ -204,7 +152,7 @@ def keep_frozen_batchnorm_in_eval(model, frozen_modules):
 def set_frozen_batchnorm_eval(frozen_batchnorms):
     """
     model.train() changes all modules to training mode.
-    This function restores frozen BatchNorm modules to eval mode.
+    Restore eval mode for BatchNorm modules inside frozen layers.
     """
 
     for module in frozen_batchnorms:
@@ -389,19 +337,17 @@ def run_training(
     # Model
     # --------------------------------------------------------
 
+    # factory.py has already applied requires_grad=False
+    # according to model_config_data["model"]["freezing"].
     model = create_model(model_config_data)
-
-    # Apply freezing before moving model to device.
-    frozen_modules = apply_layer_freezing(
-        model,
-        model_settings
-    )
 
     model = model.to(device)
 
-    frozen_batchnorms = keep_frozen_batchnorm_in_eval(
+    # Collect frozen BatchNorm modules only.
+    # Do not freeze parameters again in train.py.
+    frozen_batchnorms = get_frozen_batchnorms(
         model,
-        frozen_modules
+        model_settings
     )
 
     total_params, trainable_params = count_parameters(model)
@@ -471,9 +417,7 @@ def run_training(
 
     scheduler_config = training_config["scheduler"]
 
-    # IMPORTANT:
     # Only train parameters whose requires_grad is True.
-
     trainable_parameters = [
         parameter
         for parameter in model.parameters()
