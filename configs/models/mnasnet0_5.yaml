@@ -1,8 +1,15 @@
 model:
   name: mnasnet0_5
   pretrained: true
+
   num_classes: 2
   input_channels: 1
+
   first_layer: layers.0
   classifier: classifier.1
-  dropout: 0.0
+
+  dropout: 0.2  
+  freeze:
+    enabled: true
+    strategy: partial  
+    freeze_until: layers.8
