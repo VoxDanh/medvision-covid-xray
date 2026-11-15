@@ -1,4 +1,3 @@
-
 model:
   name: mobilenet_v3_large
   pretrained: true
@@ -9,4 +8,8 @@ model:
   first_layer: features.0
   classifier: classifier.3
 
-  dropout: 0.2
+  dropout: 0.2 
+  freeze:
+    enabled: true
+    strategy: partial  
+    freeze_until: features.8
