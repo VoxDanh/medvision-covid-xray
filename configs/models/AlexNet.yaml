@@ -1,8 +1,15 @@
 model:
-  name: alexnet
+  name: AlexNet
   pretrained: true
+
   num_classes: 2
   input_channels: 1
+
   first_layer: features.0
   classifier: classifier.6
-  dropout: 0.0
+
+  dropout: 0.5 
+  freeze:
+    enabled: true
+    strategy: partial 
+    freeze_until: features.6
