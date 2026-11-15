@@ -1,5 +1,5 @@
 model:
-  name: ResNet34     
+  name: resnet34
   pretrained: true
 
   num_classes: 2
@@ -8,4 +8,11 @@ model:
   first_layer: conv1
   classifier: fc
 
-  dropout: 0.0
+  dropout: 0.2
+
+  freezing:
+    enabled: true
+    freeze_layers:
+      - bn1
+      - layer1
+      - layer2
