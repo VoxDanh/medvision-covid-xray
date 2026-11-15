@@ -8,4 +8,14 @@ model:
   first_layer: features.0
   classifier: classifier.6
 
-  dropout: 0.0
+  dropout: 0.3
+
+  freezing:
+    enabled: true
+    freeze_layers:
+      - features.2
+      - features.5
+      - features.7
+      - features.10
+      - features.12
+      - features.14
