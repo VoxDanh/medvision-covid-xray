@@ -1,8 +1,24 @@
 model:
-  name: MobileNet_V2        # backbone MobileNetV2
-  pretrained: true         # dùng pretrained ImageNet
-  num_classes: 2           # số lớp: Normal, COVID
-  input_channels: 1        # ảnh X-ray grayscale
-  first_layer: "features.0.0"  # conv đầu tiên (dùng dạng chuỗi an toàn cho YAML)
-  classifier: "classifier.1"   # chỉ rõ Linear cuối cùng trong classifier
-  dropout: 0.0             # có thể chỉnh nếu cần regularization
+  name: MobileNet_V2
+  pretrained: true
+  num_classes: 2
+  input_channels: 1
+  first_layer: features.0.0
+  classifier: classifier.1
+  dropout: 0.0
+  freezing:
+    enabled: true
+    freeze_layers:
+    - features.1
+    - features.2
+    - features.3
+    - features.4
+    - features.5
+    - features.6
+    - features.7
+    - features.8
+    - features.9
+    - features.10
+    - features.11
+    - features.12
+    - features.13
