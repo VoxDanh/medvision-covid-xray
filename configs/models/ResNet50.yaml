@@ -1,5 +1,5 @@
 model:
-  name: resnet50
+  name: ResNet50
   pretrained: true
 
   num_classes: 2
