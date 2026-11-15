@@ -1,22 +1,18 @@
 model:
-  name: mobilenet_v3_small
+  name: resnet50
   pretrained: true
 
   num_classes: 2
   input_channels: 1
 
-  first_layer: features.0.0
-  classifier: classifier.3
+  first_layer: conv1
+  classifier: fc
 
-  dropout: 0.2
+  dropout: 0.3
 
   freezing:
     enabled: true
     freeze_layers:
-      - features.0.1
-      - features.1
-      - features.2
-      - features.3
-      - features.4
-      - features.5
-      - features.6
+      - bn1
+      - layer1
+      - layer2
