@@ -1,8 +1,15 @@
 model:
   name: ResNet18
   pretrained: true
+
   num_classes: 2
   input_channels: 1
+
   first_layer: conv1
   classifier: fc
-  dropout: 0.0
+
+  dropout: 0.2  
+  freeze:
+    enabled: true
+    strategy: partial  
+    freeze_until: layer2
